@@ -21,6 +21,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { projectsAPI, Project } from '../../api/client';
 import { Link as RouterLink } from 'react-router-dom';
 import DarkModeIconButton from '../../components/DarkModeIconButton/DarkModeIconButton';
+import useUserSocket from '../../hooks/useUserSocket';
 
 function ProjectsList() {
   const { user, logout } = useAuth();
@@ -81,6 +82,70 @@ function ProjectsList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Listen for user-specific socket events (e.g., being removed from a project)
+  useUserSocket(user?.id, {
+    'user:removed-from-project': (data: any) => {
+      const projectId = data?.projectId;
+      const projectName = data?.projectName;
+      
+      // Remove project from list immediately
+      if (projectId) {
+        setProjects(prevProjects => prevProjects.filter(p => p._id !== projectId));
+      }
+      
+      // Show notification
+      toast({
+        title: 'Removed from Project',
+        description: projectName 
+          ? `You have been removed from "${projectName}"`
+          : 'You have been removed from a project',
+        status: 'warning',
+        duration: 5000,
+        isClosable: true,
+        position: 'bottom-left',
+      });
+    },
+    'user:joined-project': (data: any) => {
+      const project = data?.project;
+      
+      // Add project to list if not already there
+      if (project && project._id) {
+        setProjects(prevProjects => {
+          // Check if already in list
+          const exists = prevProjects.some(p => p._id === project._id);
+          if (exists) return prevProjects;
+          
+          // Normalize project data
+          const normalized = {
+            ...project,
+            ownerId: typeof project.ownerId === 'object' && project.ownerId?._id 
+              ? String(project.ownerId._id)
+              : String(project.ownerId || ''),
+            members: Array.isArray(project.members)
+              ? project.members.map((m: any) => 
+                  typeof m === 'object' && m?._id ? String(m._id) : String(m || '')
+                )
+              : []
+          };
+          
+          return [normalized, ...prevProjects];
+        });
+      }
+      
+      // Show notification
+      toast({
+        title: 'Joined Project',
+        description: project?.name 
+          ? `Successfully joined "${project.name}"`
+          : 'Successfully joined project',
+        status: 'success',
+        duration: 4000,
+        isClosable: true,
+        position: 'bottom-left',
+      });
+    },
+  });
+
   async function handleCreate() {
     try {
       const res = await projectsAPI.create({ name, description });
@@ -116,10 +181,8 @@ function ProjectsList() {
   async function handleJoin() {
     try {
       const res = await projectsAPI.joinByCode(joinCode);
-      // If join succeeded, reload projects
-      await load();
+      // If join succeeded, socket event will handle the notification and list update
       setJoinCode('');
-      toast({ title: 'Joined project', status: 'success' });
     } catch (err: unknown) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const msg = (err as any)?.response?.data?.error || (err instanceof Error ? err.message : String(err));
